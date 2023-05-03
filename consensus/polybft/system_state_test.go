@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/0xPolygon/polygon-edge/chain"
+	"github.com/0xPolygon/polygon-edge/contracts"
 	"github.com/0xPolygon/polygon-edge/state"
 	itrie "github.com/0xPolygon/polygon-edge/state/immutable-trie"
 	"github.com/0xPolygon/polygon-edge/types"
@@ -62,22 +63,22 @@ func TestSystemState_GetValidatorSet(t *testing.T) {
 	})
 
 	solcContract, err := cc.Compile()
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	bin, err := hex.DecodeString(solcContract.Bin)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	transition := newTestTransition(t, nil)
 
 	// deploy a contract
 	result := transition.Create2(types.Address{}, bin, big.NewInt(0), 1000000000)
-	assert.NoError(t, result.Err)
+	require.NoError(t, result.Err)
 
 	provider := &stateProvider{
 		transition: transition,
 	}
 
-	st := NewSystemState(&PolyBFTConfig{ValidatorSetAddr: result.Address}, provider)
+	st := NewSystemState(result.Address, contracts.StateReceiverContract, provider)
 	validators, err := st.GetValidatorSet()
 	assert.NoError(t, err)
 	assert.Equal(t, types.Address(ethgo.HexToAddress("1")), validators[0].Address)
@@ -117,7 +118,7 @@ func TestSystemState_GetNextCommittedIndex(t *testing.T) {
 		transition: transition,
 	}
 
-	systemState := NewSystemState(&PolyBFTConfig{StateReceiverAddr: result.Address}, provider)
+	systemState := NewSystemState(contracts.ValidatorSetContract, result.Address, provider)
 
 	expectedNextCommittedIndex := uint64(45)
 	input, err := sideChainBridgeABI.Encode([1]interface{}{expectedNextCommittedIndex})
@@ -164,7 +165,7 @@ func TestSystemState_GetEpoch(t *testing.T) {
 		transition: transition,
 	}
 
-	systemState := NewSystemState(&PolyBFTConfig{ValidatorSetAddr: result.Address}, provider)
+	systemState := NewSystemState(result.Address, contracts.StateReceiverContract, provider)
 
 	expectedEpoch := uint64(50)
 	input, err := setEpochMethod.Encode([1]interface{}{expectedEpoch})
@@ -187,8 +188,8 @@ func TestStateProvider_Txn_NotSupported(t *testing.T) {
 		transition: transition,
 	}
 
-	require.PanicsWithError(t, errSendTxnUnsupported.Error(),
-		func() { _, _ = provider.Txn(ethgo.ZeroAddress, createTestKey(t), []byte{0x1}) })
+	_, err := provider.Txn(ethgo.ZeroAddress, createTestKey(t), []byte{0x1})
+	require.ErrorIs(t, err, errSendTxnUnsupported)
 }
 
 func newTestTransition(t *testing.T, alloc map[types.Address]*chain.GenesisAccount) *state.Transition {
@@ -198,9 +199,13 @@ func newTestTransition(t *testing.T, alloc map[types.Address]*chain.GenesisAccou
 
 	ex := state.NewExecutor(&chain.Params{
 		Forks: chain.AllForksEnabled,
+		BurnContract: map[uint64]string{
+			0: types.ZeroAddress.String(),
+		},
 	}, st, hclog.NewNullLogger())
 
-	rootHash := ex.WriteGenesis(alloc)
+	rootHash, err := ex.WriteGenesis(alloc, types.Hash{})
+	require.NoError(t, err)
 
 	ex.GetHash = func(h *types.Header) state.GetHashByNumber {
 		return func(i uint64) types.Hash {

@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"path"
 	"runtime"
@@ -23,16 +24,52 @@ func main() {
 		Name string
 	}{
 		{
-			"root/CheckpointManager.sol",
-			"CheckpointManager",
-		},
-		{
-			"root/ExitHelper.sol",
-			"ExitHelper",
+			"child/ChildValidatorSet.sol",
+			"ChildValidatorSet",
 		},
 		{
 			"child/L2StateSender.sol",
 			"L2StateSender",
+		},
+		{
+			"child/StateReceiver.sol",
+			"StateReceiver",
+		},
+		{
+			"child/NativeERC20.sol",
+			"NativeERC20",
+		},
+		{
+			"child/NativeERC20Mintable.sol",
+			"NativeERC20Mintable",
+		},
+		{
+			"child/ChildERC20.sol",
+			"ChildERC20",
+		},
+		{
+			"child/ChildERC20Predicate.sol",
+			"ChildERC20Predicate",
+		},
+		{
+			"child/ChildERC721.sol",
+			"ChildERC721",
+		},
+		{
+			"child/ChildERC721Predicate.sol",
+			"ChildERC721Predicate",
+		},
+		{
+			"child/ChildERC1155.sol",
+			"ChildERC1155",
+		},
+		{
+			"child/ChildERC1155Predicate.sol",
+			"ChildERC1155Predicate",
+		},
+		{
+			"child/System.sol",
+			"System",
 		},
 		{
 			"common/BLS.sol",
@@ -43,31 +80,51 @@ func main() {
 			"BN256G2",
 		},
 		{
-			"child/StateReceiver.sol",
-			"StateReceiver",
+			"common/Merkle.sol",
+			"Merkle",
+		},
+		{
+			"root/CheckpointManager.sol",
+			"CheckpointManager",
+		},
+		{
+			"root/ExitHelper.sol",
+			"ExitHelper",
 		},
 		{
 			"root/StateSender.sol",
 			"StateSender",
 		},
 		{
-			"child/ChildValidatorSet.sol",
-			"ChildValidatorSet",
+			"mocks/MockERC20.sol",
+			"MockERC20",
 		},
 		{
-			"child/System.sol",
-			"System",
+			"root/RootERC20Predicate.sol",
+			"RootERC20Predicate",
 		},
 		{
-			"child/MRC20.sol",
-			"MRC20",
+			"mocks/MockERC721.sol",
+			"MockERC721",
+		},
+		{
+			"root/RootERC721Predicate.sol",
+			"RootERC721Predicate",
+		},
+		{
+			"mocks/MockERC1155.sol",
+			"MockERC1155",
+		},
+		{
+			"root/RootERC1155Predicate.sol",
+			"RootERC1155Predicate",
 		},
 	}
 
 	for _, v := range readContracts {
 		artifactBytes, err := artifact.ReadArtifactData(scpath, v.Path, v.Name)
 		if err != nil {
-			panic(err)
+			log.Fatal(err)
 		}
 
 		f.Var().Id(v.Name + "Artifact").String().Op("=").Lit(string(artifactBytes))
@@ -75,11 +132,11 @@ func main() {
 
 	fl, err := os.Create(currentPath + "/../gen_sc_data.go")
 	if err != nil {
-		panic(err)
+		log.Fatal(err)
 	}
 
 	_, err = fmt.Fprintf(fl, "%#v", f)
 	if err != nil {
-		panic(err)
+		log.Fatal(err)
 	}
 }

@@ -6,21 +6,20 @@ import (
 	"math/big"
 	"os"
 
+	"github.com/0xPolygon/polygon-edge/command/polybftsecrets"
 	"github.com/0xPolygon/polygon-edge/consensus/polybft"
 	"github.com/0xPolygon/polygon-edge/consensus/polybft/contractsapi"
 	"github.com/0xPolygon/polygon-edge/consensus/polybft/wallet"
 	"github.com/0xPolygon/polygon-edge/contracts"
 	"github.com/0xPolygon/polygon-edge/helper/hex"
-	secretsHelper "github.com/0xPolygon/polygon-edge/secrets/helper"
 	"github.com/0xPolygon/polygon-edge/txrelayer"
 	"github.com/0xPolygon/polygon-edge/types"
 	"github.com/umbracle/ethgo"
 )
 
 const (
-	AccountDirFlag = "account"
-	SelfFlag       = "self"
-	AmountFlag     = "amount"
+	SelfFlag   = "self"
+	AmountFlag = "amount"
 
 	DefaultGasPrice = 1879048192 // 0x70000000
 )
@@ -33,13 +32,32 @@ func CheckIfDirectoryExist(dir string) error {
 	return nil
 }
 
-func GetAccountFromDir(dir string) (*wallet.Account, error) {
-	secretsManager, err := secretsHelper.SetupLocalSecretsManager(dir)
+func ValidateSecretFlags(dataDir, config string) error {
+	if config == "" {
+		if dataDir == "" {
+			return polybftsecrets.ErrInvalidParams
+		} else {
+			return CheckIfDirectoryExist(dataDir)
+		}
+	}
+
+	return nil
+}
+
+// GetAccount resolves secrets manager and returns an account object
+func GetAccount(accountDir, accountConfig string) (*wallet.Account, error) {
+	// resolve secrets manager instance and allow usage of insecure local secrets manager
+	secretsManager, err := polybftsecrets.GetSecretsManager(accountDir, accountConfig, true)
 	if err != nil {
 		return nil, err
 	}
 
 	return wallet.NewAccountFromSecret(secretsManager)
+}
+
+// GetAccountFromDir returns an account object from local secrets manager
+func GetAccountFromDir(accountDir string) (*wallet.Account, error) {
+	return GetAccount(accountDir, "")
 }
 
 // GetValidatorInfo queries ChildValidatorSet smart contract and retrieves validator info for given address

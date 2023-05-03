@@ -7,6 +7,7 @@ import (
 
 	"github.com/0xPolygon/polygon-edge/command"
 	"github.com/0xPolygon/polygon-edge/command/helper"
+	"github.com/0xPolygon/polygon-edge/command/polybftsecrets"
 	sidechainHelper "github.com/0xPolygon/polygon-edge/command/sidechain"
 	"github.com/0xPolygon/polygon-edge/consensus/polybft/contractsapi"
 	"github.com/0xPolygon/polygon-edge/contracts"
@@ -17,9 +18,7 @@ import (
 )
 
 var (
-	params           stakeParams
-	stakeEventABI    = contractsapi.ChildValidatorSet.Abi.Events["Staked"]
-	delegateEventABI = contractsapi.ChildValidatorSet.Abi.Events["Delegated"]
+	params stakeParams
 )
 
 func GetCommand() *cobra.Command {
@@ -39,9 +38,16 @@ func GetCommand() *cobra.Command {
 func setFlags(cmd *cobra.Command) {
 	cmd.Flags().StringVar(
 		&params.accountDir,
-		sidechainHelper.AccountDirFlag,
+		polybftsecrets.AccountDirFlag,
 		"",
-		"the directory path where validator key is stored",
+		polybftsecrets.AccountDirFlagDesc,
+	)
+
+	cmd.Flags().StringVar(
+		&params.accountConfig,
+		polybftsecrets.AccountConfigFlag,
+		"",
+		polybftsecrets.AccountConfigFlagDesc,
 	)
 
 	cmd.Flags().BoolVar(
@@ -66,6 +72,7 @@ func setFlags(cmd *cobra.Command) {
 	)
 
 	cmd.MarkFlagsMutuallyExclusive(sidechainHelper.SelfFlag, delegateAddressFlag)
+	cmd.MarkFlagsMutuallyExclusive(polybftsecrets.AccountDirFlag, polybftsecrets.AccountConfigFlag)
 }
 
 func runPreRun(cmd *cobra.Command, _ []string) error {
@@ -78,7 +85,7 @@ func runCommand(cmd *cobra.Command, _ []string) error {
 	outputter := command.InitializeOutputter(cmd)
 	defer outputter.WriteOutput()
 
-	validatorAccount, err := sidechainHelper.GetAccountFromDir(params.accountDir)
+	validatorAccount, err := sidechainHelper.GetAccount(params.accountDir, params.accountConfig)
 	if err != nil {
 		return err
 	}
@@ -125,31 +132,35 @@ func runCommand(cmd *cobra.Command, _ []string) error {
 		validatorAddress: validatorAccount.Ecdsa.Address().String(),
 	}
 
-	var foundLog bool
+	var (
+		stakedEvent    contractsapi.StakedEvent
+		delegatedEvent contractsapi.DelegatedEvent
+		foundLog       bool
+	)
 
 	// check the logs to check for the result
 	for _, log := range receipt.Logs {
-		if stakeEventABI.Match(log) {
-			event, err := stakeEventABI.ParseLog(log)
-			if err != nil {
-				return err
-			}
+		doesMatch, err := stakedEvent.ParseLog(log)
+		if err != nil {
+			return err
+		}
 
+		if doesMatch { // its a stake function call
 			result.isSelfStake = true
-			result.amount = event["amount"].(*big.Int).Uint64() //nolint:forcetypeassert
-
+			result.amount = stakedEvent.Amount.Uint64()
 			foundLog = true
 
 			break
-		} else if delegateEventABI.Match(log) {
-			event, err := delegateEventABI.ParseLog(log)
-			if err != nil {
-				return err
-			}
+		}
 
-			result.amount = event["amount"].(*big.Int).Uint64()              //nolint:forcetypeassert
-			result.delegatedTo = event["validator"].(ethgo.Address).String() //nolint:forcetypeassert
+		doesMatch, err = delegatedEvent.ParseLog(log)
+		if err != nil {
+			return err
+		}
 
+		if doesMatch {
+			result.amount = delegatedEvent.Amount.Uint64()
+			result.delegatedTo = delegatedEvent.Validator.String()
 			foundLog = true
 
 			break

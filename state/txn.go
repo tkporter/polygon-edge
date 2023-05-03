@@ -70,7 +70,7 @@ func (txn *Txn) Snapshot() int {
 // RevertToSnapshot reverts to a given snapshot
 func (txn *Txn) RevertToSnapshot(id int) {
 	if id > len(txn.snapshots) {
-		panic("")
+		panic("") //nolint:gocritic
 	}
 
 	tree := txn.snapshots[id]
@@ -121,7 +121,7 @@ func (txn *Txn) upsertAccount(addr types.Address, create bool, f func(object *St
 		object = &StateObject{
 			Account: &Account{
 				Balance:  big.NewInt(0),
-				CodeHash: emptyCodeHash,
+				CodeHash: types.EmptyCodeHash.Bytes(),
 				Root:     emptyStateHash,
 			},
 		}
@@ -339,6 +339,10 @@ func (txn *Txn) GetState(addr types.Address, key types.Hash) types.Hash {
 		}
 	}
 
+	if object.withFakeStorage {
+		return types.Hash{}
+	}
+
 	return txn.snapshot.GetStorage(addr, object.Account.Root, key)
 }
 
@@ -388,7 +392,8 @@ func (txn *Txn) GetCode(addr types.Address) []byte {
 	if object.DirtyCode {
 		return object.Code
 	}
-	// TODO; Should we move this to state?
+	//nolint:godox
+	// TODO; Should we move this to state? (to be fixed in EVM-527)
 	v, ok := txn.codeCache.Get(addr)
 
 	if ok {
@@ -483,13 +488,26 @@ func (txn *Txn) GetCommittedState(addr types.Address, key types.Hash) types.Hash
 	return txn.snapshot.GetStorage(addr, obj.Account.Root, key)
 }
 
+// SetFullStorage is used to replace the full state of the address.
+// Only used for debugging on the override jsonrpc endpoint.
+func (txn *Txn) SetFullStorage(addr types.Address, state map[types.Hash]types.Hash) {
+	for k, v := range state {
+		txn.SetState(addr, k, v)
+	}
+
+	txn.upsertAccount(addr, true, func(object *StateObject) {
+		object.withFakeStorage = true
+	})
+}
+
 func (txn *Txn) TouchAccount(addr types.Address) {
 	txn.upsertAccount(addr, true, func(obj *StateObject) {
 
 	})
 }
 
-// TODO, check panics with this ones
+//nolint:godox
+// TODO, check panics with this ones (to be fixed in EVM-528)
 
 func (txn *Txn) Exist(addr types.Address) bool {
 	_, exists := txn.getStateObject(addr)
@@ -510,7 +528,7 @@ func newStateObject(txn *Txn) *StateObject {
 	return &StateObject{
 		Account: &Account{
 			Balance:  big.NewInt(0),
-			CodeHash: emptyCodeHash,
+			CodeHash: types.EmptyCodeHash.Bytes(),
 			Root:     emptyStateHash,
 		},
 	}
@@ -520,7 +538,7 @@ func (txn *Txn) CreateAccount(addr types.Address) {
 	obj := &StateObject{
 		Account: &Account{
 			Balance:  big.NewInt(0),
-			CodeHash: emptyCodeHash,
+			CodeHash: types.EmptyCodeHash.Bytes(),
 			Root:     emptyStateHash,
 		},
 	}
@@ -551,13 +569,13 @@ func (txn *Txn) CleanDeleteObjects(deleteEmptyObjects bool) {
 	for _, k := range remove {
 		v, ok := txn.txn.Get(k)
 		if !ok {
-			panic("it should not happen")
+			panic("it should not happen") //nolint:gocritic
 		}
 
 		obj, ok := v.(*StateObject)
 
 		if !ok {
-			panic("it should not happen")
+			panic("it should not happen") //nolint:gocritic
 		}
 
 		obj2 := obj.Copy()
