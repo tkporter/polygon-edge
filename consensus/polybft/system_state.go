@@ -1,11 +1,9 @@
 package polybft
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"math/big"
-	"sort"
 
 	"github.com/0xPolygon/polygon-edge/consensus/polybft/contractsapi"
 	bls "github.com/0xPolygon/polygon-edge/consensus/polybft/signer"
@@ -44,14 +42,14 @@ type SystemStateImpl struct {
 }
 
 // NewSystemState initializes new instance of systemState which abstracts smart contracts functions
-func NewSystemState(config *PolyBFTConfig, provider contract.Provider) *SystemStateImpl {
+func NewSystemState(valSetAddr types.Address, stateRcvAddr types.Address, provider contract.Provider) *SystemStateImpl {
 	s := &SystemStateImpl{}
 	s.validatorContract = contract.NewContract(
-		ethgo.Address(config.ValidatorSetAddr),
+		ethgo.Address(valSetAddr),
 		contractsapi.ChildValidatorSet.Abi, contract.WithProvider(provider),
 	)
 	s.sidechainBridgeContract = contract.NewContract(
-		ethgo.Address(config.StateReceiverAddr),
+		ethgo.Address(stateRcvAddr),
 		contractsapi.StateReceiver.Abi,
 		contract.WithProvider(provider),
 	)
@@ -79,7 +77,12 @@ func (s *SystemStateImpl) GetValidatorSet() (AccountSet, error) {
 			return nil, fmt.Errorf("failed to call getValidator function: %w", err)
 		}
 
-		pubKey, err := bls.UnmarshalPublicKeyFromBigInt(output["blsKey"].([4]*big.Int))
+		blsKey, ok := output["blsKey"].([4]*big.Int)
+		if !ok {
+			return nil, fmt.Errorf("failed to decode blskey")
+		}
+
+		pubKey, err := bls.UnmarshalPublicKeyFromBigInt(blsKey)
 		if err != nil {
 			return nil, fmt.Errorf("failed to unmarshal BLS public key: %w", err)
 		}
@@ -89,27 +92,32 @@ func (s *SystemStateImpl) GetValidatorSet() (AccountSet, error) {
 			return nil, fmt.Errorf("failed to decode total stake")
 		}
 
+		isActive, ok := output["active"].(bool)
+		if !ok {
+			return nil, fmt.Errorf("failed to decode active field")
+		}
+
 		return &ValidatorMetadata{
 			Address:     types.Address(addr),
 			BlsKey:      pubKey,
 			VotingPower: new(big.Int).Set(totalStake),
+			IsActive:    isActive,
 		}, nil
 	}
 
-	for _, index := range addresses {
-		val, err := queryValidator(index)
+	for _, addr := range addresses {
+		val, err := queryValidator(addr)
 		if err != nil {
 			return nil, err
 		}
 
+		// filter out non active validators
+		if !val.IsActive {
+			continue
+		}
+
 		res = append(res, val)
 	}
-
-	// It is important to keep validator ordered by addresses, because of internal storage on SC
-	// which changes original ordering of sent validators
-	sort.Slice(res, func(i, j int) bool {
-		return bytes.Compare(res[i].Address[:], res[j].Address[:]) < 0
-	})
 
 	return res, nil
 }

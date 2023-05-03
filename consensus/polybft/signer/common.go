@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"log"
 	"math/big"
 
 	pcrypto "github.com/0xPolygon/polygon-edge/crypto"
@@ -25,18 +26,21 @@ var (
 
 	// domain used to map hash to G1 used by child checkpoint manager
 	DomainCheckpointManager = pcrypto.Keccak256([]byte("DOMAIN_CHECKPOINT_MANAGER"))
+
+	DomainCommonSigning = pcrypto.Keccak256([]byte("DOMAIN_COMMON_SIGNING"))
+	DomainStateReceiver = pcrypto.Keccak256([]byte("DOMAIN_STATE_RECEIVER"))
 )
 
 func mustG2Point(str string) *bn256.G2 {
 	buf, err := hex.DecodeString(str)
 	if err != nil {
-		panic(err)
+		log.Fatal(err)
 	}
 
 	b := new(bn256.G2)
 
 	if _, err := b.Unmarshal(buf); err != nil {
-		panic(err)
+		log.Fatal(err)
 	}
 
 	return b

@@ -5,17 +5,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/big"
-	"os"
-	"path/filepath"
-	"time"
 
 	"github.com/0xPolygon/polygon-edge/chain"
 	"github.com/0xPolygon/polygon-edge/consensus/polybft/contractsapi"
 	bls "github.com/0xPolygon/polygon-edge/consensus/polybft/signer"
 	"github.com/0xPolygon/polygon-edge/helper/common"
 	"github.com/0xPolygon/polygon-edge/types"
-	"github.com/umbracle/ethgo/abi"
 )
+
+const ConsensusName = "polybft"
 
 // PolyBFTConfig is the configuration file for the Polybft consensus protocol.
 type PolyBFTConfig struct {
@@ -35,40 +33,59 @@ type PolyBFTConfig struct {
 	SprintSize uint64 `json:"sprintSize"`
 
 	// BlockTime is target frequency of blocks production
-	BlockTime time.Duration `json:"blockTime"`
+	BlockTime common.Duration `json:"blockTime"`
 
 	// Governance is the initial governance address
 	Governance types.Address `json:"governance"`
 
-	// TODO: Remove these two addresses as they are hardcoded and known in advance
-	// Address of the system contracts, as of now (testing) this is populated automatically during genesis
-	ValidatorSetAddr  types.Address `json:"validatorSetAddr"`
-	StateReceiverAddr types.Address `json:"stateReceiverAddr"`
+	// MintableNativeToken denotes whether mintable native token is used
+	MintableNativeToken bool `json:"mintableNative"`
+
+	// NativeTokenConfig defines name, symbol and decimal count of the native token
+	NativeTokenConfig *TokenConfig `json:"nativeTokenConfig"`
+
+	InitialTrieRoot types.Hash `json:"initialTrieRoot"`
+}
+
+// LoadPolyBFTConfig loads chain config from provided path and unmarshals PolyBFTConfig
+func LoadPolyBFTConfig(chainConfigFile string) (PolyBFTConfig, error) {
+	chainCfg, err := chain.ImportFromFile(chainConfigFile)
+	if err != nil {
+		return PolyBFTConfig{}, err
+	}
+
+	return GetPolyBFTConfig(chainCfg)
 }
 
 // GetPolyBFTConfig deserializes provided chain config and returns PolyBFTConfig
 func GetPolyBFTConfig(chainConfig *chain.Chain) (PolyBFTConfig, error) {
-	consensusConfigJSON, err := json.Marshal(chainConfig.Params.Engine["polybft"])
+	consensusConfigJSON, err := json.Marshal(chainConfig.Params.Engine[ConsensusName])
 	if err != nil {
 		return PolyBFTConfig{}, err
 	}
 
 	var polyBFTConfig PolyBFTConfig
-	err = json.Unmarshal(consensusConfigJSON, &polyBFTConfig)
-
-	if err != nil {
+	if err = json.Unmarshal(consensusConfigJSON, &polyBFTConfig); err != nil {
 		return PolyBFTConfig{}, err
 	}
 
 	return polyBFTConfig, nil
 }
 
-// BridgeConfig is the rootchain bridge configuration
+// BridgeConfig is the rootchain configuration, needed for bridging
 type BridgeConfig struct {
-	BridgeAddr      types.Address `json:"stateSenderAddr"`
-	CheckpointAddr  types.Address `json:"checkpointAddr"`
-	AdminAddress    types.Address `json:"adminAddress"`
-	JSONRPCEndpoint string        `json:"jsonRPCEndpoint"`
+	StateSenderAddr          types.Address `json:"stateSenderAddress"`
+	CheckpointManagerAddr    types.Address `json:"checkpointManagerAddress"`
+	ExitHelperAddr           types.Address `json:"exitHelperAddress"`
+	RootERC20PredicateAddr   types.Address `json:"erc20PredicateAddress"`
+	RootNativeERC20Addr      types.Address `json:"nativeERC20Address"`
+	RootERC721Addr           types.Address `json:"erc721Address"`
+	RootERC721PredicateAddr  types.Address `json:"erc721PredicateAddress"`
+	RootERC1155Addr          types.Address `json:"erc1155Address"`
+	RootERC1155PredicateAddr types.Address `json:"erc1155PredicateAddress"`
+
+	JSONRPCEndpoint         string                   `json:"jsonRPCEndpoint"`
+	EventTrackerStartBlocks map[types.Address]uint64 `json:"eventTrackerStartBlocks"`
 }
 
 func (p *PolyBFTConfig) IsBridgeEnabled() bool {
@@ -82,7 +99,8 @@ type Validator struct {
 	BlsKey        string
 	BlsSignature  string
 	Balance       *big.Int
-	NodeID        string
+	Stake         *big.Int
+	MultiAddr     string
 }
 
 type validatorRaw struct {
@@ -90,36 +108,23 @@ type validatorRaw struct {
 	BlsKey       string        `json:"blsKey"`
 	BlsSignature string        `json:"blsSignature"`
 	Balance      *string       `json:"balance"`
-	NodeID       string        `json:"nodeId"`
-}
-
-func (v *Validator) InitKOSKSignature(chainID int64) error {
-	signature, err := MakeKOSKSignature(v.BlsPrivateKey, v.Address, chainID, bls.DomainValidatorSet)
-	if err != nil {
-		return err
-	}
-
-	signatureBytes, err := signature.Marshal()
-	if err != nil {
-		return err
-	}
-
-	v.BlsSignature = hex.EncodeToString(signatureBytes)
-
-	return nil
+	Stake        *string       `json:"stake"`
+	MultiAddr    string        `json:"multiAddr"`
 }
 
 func (v *Validator) MarshalJSON() ([]byte, error) {
-	raw := &validatorRaw{Address: v.Address, BlsKey: v.BlsKey, NodeID: v.NodeID, BlsSignature: v.BlsSignature}
+	raw := &validatorRaw{Address: v.Address, BlsKey: v.BlsKey, MultiAddr: v.MultiAddr, BlsSignature: v.BlsSignature}
 	raw.Balance = types.EncodeBigInt(v.Balance)
+	raw.Stake = types.EncodeBigInt(v.Stake)
 
 	return json.Marshal(raw)
 }
 
 func (v *Validator) UnmarshalJSON(data []byte) error {
-	var raw validatorRaw
-
-	var err error
+	var (
+		raw validatorRaw
+		err error
+	)
 
 	if err = json.Unmarshal(data, &raw); err != nil {
 		return err
@@ -128,9 +133,14 @@ func (v *Validator) UnmarshalJSON(data []byte) error {
 	v.Address = raw.Address
 	v.BlsKey = raw.BlsKey
 	v.BlsSignature = raw.BlsSignature
-	v.NodeID = raw.NodeID
-	v.Balance, err = types.ParseUint256orHex(raw.Balance)
+	v.MultiAddr = raw.MultiAddr
 
+	v.Balance, err = types.ParseUint256orHex(raw.Balance)
+	if err != nil {
+		return err
+	}
+
+	v.Stake, err = types.ParseUint256orHex(raw.Stake)
 	if err != nil {
 		return err
 	}
@@ -179,7 +189,7 @@ func (v Validator) ToValidatorInitAPIBinding() (*contractsapi.ValidatorInit, err
 		Addr:      v.Address,
 		Pubkey:    pubKey.ToBigInt(),
 		Signature: signBigInts,
-		Stake:     new(big.Int).Set(v.Balance),
+		Stake:     new(big.Int).Set(v.Stake),
 	}, nil
 }
 
@@ -193,79 +203,59 @@ func (v *Validator) ToValidatorMetadata() (*ValidatorMetadata, error) {
 	metadata := &ValidatorMetadata{
 		Address:     v.Address,
 		BlsKey:      blsKey,
-		VotingPower: new(big.Int).Set(v.Balance),
+		VotingPower: new(big.Int).Set(v.Stake),
+		IsActive:    true,
 	}
 
 	return metadata, nil
 }
 
-// RootchainConfig contains information about rootchain contract addresses
-// as well as rootchain admin account address
+// String implements fmt.Stringer interface
+func (v *Validator) String() string {
+	return fmt.Sprintf("Address=%s; Balance=%d; P2P Multi addr=%s; BLS Key=%s;",
+		v.Address, v.Balance, v.MultiAddr, v.BlsKey)
+}
+
+// RootchainConfig contains rootchain metadata (such as JSON RPC endpoint and contract addresses)
 type RootchainConfig struct {
-	StateSenderAddress       types.Address `json:"stateSenderAddress"`
-	CheckpointManagerAddress types.Address `json:"checkpointManagerAddress"`
-	BLSAddress               types.Address `json:"blsAddress"`
-	BN256G2Address           types.Address `json:"bn256G2Address"`
-	ExitHelperAddress        types.Address `json:"exitHelperAddress"`
-	AdminAddress             types.Address `json:"adminAddress"`
+	JSONRPCAddr string
+
+	StateSenderAddress          types.Address
+	CheckpointManagerAddress    types.Address
+	BLSAddress                  types.Address
+	BN256G2Address              types.Address
+	ExitHelperAddress           types.Address
+	RootERC20PredicateAddress   types.Address
+	RootNativeERC20Address      types.Address
+	ERC20TemplateAddress        types.Address
+	RootERC721PredicateAddress  types.Address
+	RootERC721Address           types.Address
+	RootERC721TemplateAddress   types.Address
+	RootERC1155PredicateAddress types.Address
+	RootERC1155Address          types.Address
+	ERC1155TemplateAddress      types.Address
 }
 
 // ToBridgeConfig creates BridgeConfig instance
 func (r *RootchainConfig) ToBridgeConfig() *BridgeConfig {
 	return &BridgeConfig{
-		BridgeAddr:     r.StateSenderAddress,
-		CheckpointAddr: r.CheckpointManagerAddress,
-		AdminAddress:   r.AdminAddress,
+		JSONRPCEndpoint: r.JSONRPCAddr,
+
+		StateSenderAddr:          r.StateSenderAddress,
+		CheckpointManagerAddr:    r.CheckpointManagerAddress,
+		ExitHelperAddr:           r.ExitHelperAddress,
+		RootERC20PredicateAddr:   r.RootERC20PredicateAddress,
+		RootNativeERC20Addr:      r.RootNativeERC20Address,
+		RootERC721Addr:           r.RootERC721Address,
+		RootERC721PredicateAddr:  r.RootERC721PredicateAddress,
+		RootERC1155Addr:          r.RootERC1155Address,
+		RootERC1155PredicateAddr: r.RootERC1155PredicateAddress,
 	}
 }
 
-// Manifest holds metadata, such as genesis validators and rootchain configuration
-type Manifest struct {
-	GenesisValidators []*Validator     `json:"validators"`
-	RootchainConfig   *RootchainConfig `json:"rootchain"`
-	ChainID           int64            `json:"chainID"`
-}
-
-// LoadManifest deserializes Manifest instance
-func LoadManifest(metadataFile string) (*Manifest, error) {
-	data, err := os.ReadFile(metadataFile)
-	if err != nil {
-		return nil, err
-	}
-
-	var manifest Manifest
-
-	if err := json.Unmarshal(data, &manifest); err != nil {
-		return nil, err
-	}
-
-	return &manifest, nil
-}
-
-// Save marshals RootchainManifest instance to json and persists it to given location
-func (m *Manifest) Save(manifestPath string) error {
-	data, err := json.MarshalIndent(m, "", "    ")
-	if err != nil {
-		return fmt.Errorf("failed to marshal rootchain manifest to JSON: %w", err)
-	}
-
-	if err := common.SaveFileSafe(filepath.Clean(manifestPath), data, 0660); err != nil {
-		return fmt.Errorf("failed to save rootchain manifest file: %w", err)
-	}
-
-	return nil
-}
-
-// MakeKOSKSignature creates KOSK signature which prevents rogue attack
-func MakeKOSKSignature(
-	privateKey *bls.PrivateKey, address types.Address, chainID int64, domain []byte) (*bls.Signature, error) {
-	message, err := abi.Encode(
-		[]interface{}{address, big.NewInt(chainID)},
-		abi.MustNewType("tuple(address, uint256)"))
-	if err != nil {
-		return nil, err
-	}
-
-	// abi.Encode adds 12 zero bytes before actual address bytes
-	return privateKey.Sign(message[12:], domain)
+// TokenConfig is the configuration of native token used by edge network
+type TokenConfig struct {
+	Name     string `json:"name"`
+	Symbol   string `json:"symbol"`
+	Decimals uint8  `json:"decimals"`
 }

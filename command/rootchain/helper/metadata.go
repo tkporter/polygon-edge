@@ -12,40 +12,37 @@ import (
 	"github.com/umbracle/ethgo/wallet"
 )
 
-const DefaultPrivateKeyRaw = "aa75e9a7d427efc732f8e4f1a5b7646adcc61fd5bae40f80d13c8419c9f43d6d"
+const (
+	testAccountPrivKey = "aa75e9a7d427efc732f8e4f1a5b7646adcc61fd5bae40f80d13c8419c9f43d6d"
+	TestModeFlag       = "test"
+)
 
 var (
 	ErrRootchainNotFound = errors.New("rootchain not found")
 	ErrRootchainPortBind = errors.New("port 8545 is not bind with localhost")
+	errTestModeSecrets   = errors.New("rootchain test mode does not imply specifying secrets parameters")
 
-	// rootchainAdminKey is a private key of account which is rootchain administrator
-	// namely it represents account which deploys rootchain smart contracts
-	rootchainAdminKey *wallet.Key
+	rootchainAccountKey *wallet.Key
 )
 
-// InitRootchainAdminKey initializes a private key instance from provided hex encoded private key
-func InitRootchainAdminKey(rawKey string) error {
-	privateKeyRaw := DefaultPrivateKeyRaw
+// GetRootchainPrivateKey initializes a private key from provided raw private key
+func GetRootchainPrivateKey(rawKey string) (ethgo.Key, error) {
+	privateKeyRaw := testAccountPrivKey
 	if rawKey != "" {
 		privateKeyRaw = rawKey
 	}
 
 	dec, err := hex.DecodeString(privateKeyRaw)
 	if err != nil {
-		return fmt.Errorf("failed to decode private key string '%s': %w", privateKeyRaw, err)
+		return nil, fmt.Errorf("failed to decode private key string '%s': %w", privateKeyRaw, err)
 	}
 
-	rootchainAdminKey, err = wallet.NewWalletFromPrivKey(dec)
+	rootchainAccountKey, err = wallet.NewWalletFromPrivKey(dec)
 	if err != nil {
-		return fmt.Errorf("failed to initialize key from provided private key '%s': %w", privateKeyRaw, err)
+		return nil, fmt.Errorf("failed to initialize key from provided private key '%s': %w", privateKeyRaw, err)
 	}
 
-	return nil
-}
-
-// GetRootchainAdminKey returns rootchain admin private key
-func GetRootchainAdminKey() ethgo.Key {
-	return rootchainAdminKey
+	return rootchainAccountKey, nil
 }
 
 func GetRootchainID() (string, error) {

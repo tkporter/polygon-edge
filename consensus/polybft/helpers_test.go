@@ -4,20 +4,24 @@ import (
 	"crypto/rand"
 	"fmt"
 	"math/big"
+	"os"
+	"path"
 	"testing"
+	"time"
 
 	"github.com/0xPolygon/polygon-edge/consensus/polybft/bitmap"
 	"github.com/0xPolygon/polygon-edge/consensus/polybft/contractsapi"
 	bls "github.com/0xPolygon/polygon-edge/consensus/polybft/signer"
 	"github.com/0xPolygon/polygon-edge/consensus/polybft/wallet"
 	"github.com/0xPolygon/polygon-edge/types"
+	"github.com/hashicorp/go-hclog"
 	"github.com/stretchr/testify/require"
 )
 
 func createTestKey(t *testing.T) *wallet.Key {
 	t.Helper()
 
-	return wallet.NewKey(wallet.GenerateAccount(), bls.DomainCheckpointManager)
+	return wallet.NewKey(generateTestAccount(t))
 }
 
 func createRandomTestKeys(t *testing.T, numberOfKeys int) []*wallet.Key {
@@ -26,13 +30,13 @@ func createRandomTestKeys(t *testing.T, numberOfKeys int) []*wallet.Key {
 	result := make([]*wallet.Key, numberOfKeys, numberOfKeys)
 
 	for i := 0; i < numberOfKeys; i++ {
-		result[i] = wallet.NewKey(wallet.GenerateAccount(), bls.DomainCheckpointManager)
+		result[i] = wallet.NewKey(generateTestAccount(t))
 	}
 
 	return result
 }
 
-func createSignature(t *testing.T, accounts []*wallet.Account, hash types.Hash) *Signature {
+func createSignature(t *testing.T, accounts []*wallet.Account, hash types.Hash, domain []byte) *Signature {
 	t.Helper()
 
 	var signatures bls.Signatures
@@ -41,7 +45,7 @@ func createSignature(t *testing.T, accounts []*wallet.Account, hash types.Hash) 
 	for i, x := range accounts {
 		bmp.Set(uint64(i))
 
-		src, err := x.Bls.Sign(hash[:], bls.DomainCheckpointManager)
+		src, err := x.Bls.Sign(hash[:], domain)
 		require.NoError(t, err)
 
 		signatures = append(signatures, src)
@@ -53,11 +57,12 @@ func createSignature(t *testing.T, accounts []*wallet.Account, hash types.Hash) 
 	return &Signature{AggregatedSignature: aggs, Bitmap: bmp}
 }
 
-func createTestCommitEpochInput(t *testing.T, epochID uint64, validatorSet AccountSet, epochSize uint64) *contractsapi.CommitEpochFunction {
+func createTestCommitEpochInput(t *testing.T, epochID uint64,
+	validatorSet AccountSet, epochSize uint64) *contractsapi.CommitEpochChildValidatorSetFn {
 	t.Helper()
 
 	if validatorSet == nil {
-		validatorSet = newTestValidators(5).getPublicIdentities()
+		validatorSet = newTestValidators(t, 5).getPublicIdentities()
 	}
 
 	var startBlock uint64 = 0
@@ -71,7 +76,7 @@ func createTestCommitEpochInput(t *testing.T, epochID uint64, validatorSet Accou
 		TotalBlocks: new(big.Int).SetUint64(epochSize),
 	}
 
-	commitEpoch := &contractsapi.CommitEpochFunction{
+	commitEpoch := &contractsapi.CommitEpochChildValidatorSetFn{
 		ID: uptime.EpochID,
 		Epoch: &contractsapi.Epoch{
 			StartBlock: new(big.Int).SetUint64(startBlock + 1),
@@ -126,4 +131,38 @@ func getEpochNumber(t *testing.T, blockNumber, epochSize uint64) uint64 {
 	}
 
 	return blockNumber/epochSize + 1
+}
+
+// newTestState creates new instance of state used by tests.
+func newTestState(t *testing.T) *State {
+	t.Helper()
+
+	dir := fmt.Sprintf("/tmp/consensus-temp_%v", time.Now().UTC().Format(time.RFC3339Nano))
+	err := os.Mkdir(dir, 0775)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	state, err := newState(path.Join(dir, "my.db"), hclog.NewNullLogger(), make(chan struct{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Cleanup(func() {
+		if err := os.RemoveAll(dir); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	return state
+}
+
+func generateTestAccount(t *testing.T) *wallet.Account {
+	t.Helper()
+
+	acc, err := wallet.GenerateAccount()
+	require.NoError(t, err)
+
+	return acc
 }

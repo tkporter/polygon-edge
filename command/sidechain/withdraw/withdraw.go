@@ -2,11 +2,11 @@ package withdraw
 
 import (
 	"fmt"
-	"math/big"
 	"time"
 
 	"github.com/0xPolygon/polygon-edge/command"
 	"github.com/0xPolygon/polygon-edge/command/helper"
+	"github.com/0xPolygon/polygon-edge/command/polybftsecrets"
 	sidechainHelper "github.com/0xPolygon/polygon-edge/command/sidechain"
 	"github.com/0xPolygon/polygon-edge/consensus/polybft/contractsapi"
 	"github.com/0xPolygon/polygon-edge/contracts"
@@ -16,10 +16,7 @@ import (
 	"github.com/umbracle/ethgo"
 )
 
-var (
-	params           withdrawParams
-	withdrawEventABI = contractsapi.ChildValidatorSet.Abi.Events["Withdrawal"]
-)
+var params withdrawParams
 
 func GetCommand() *cobra.Command {
 	withdrawCmd := &cobra.Command{
@@ -37,9 +34,16 @@ func GetCommand() *cobra.Command {
 func setFlags(cmd *cobra.Command) {
 	cmd.Flags().StringVar(
 		&params.accountDir,
-		sidechainHelper.AccountDirFlag,
+		polybftsecrets.AccountDirFlag,
 		"",
-		"the directory path where validator key is stored",
+		polybftsecrets.AccountDirFlagDesc,
+	)
+
+	cmd.Flags().StringVar(
+		&params.accountConfig,
+		polybftsecrets.AccountConfigFlag,
+		"",
+		polybftsecrets.AccountConfigFlagDesc,
 	)
 
 	cmd.Flags().StringVar(
@@ -49,6 +53,7 @@ func setFlags(cmd *cobra.Command) {
 		"address where to withdraw withdrawable amount",
 	)
 
+	cmd.MarkFlagsMutuallyExclusive(polybftsecrets.AccountDirFlag, polybftsecrets.AccountConfigFlag)
 	helper.RegisterJSONRPCFlag(cmd)
 }
 
@@ -62,7 +67,7 @@ func runCommand(cmd *cobra.Command, _ []string) error {
 	outputter := command.InitializeOutputter(cmd)
 	defer outputter.WriteOutput()
 
-	validatorAccount, err := sidechainHelper.GetAccountFromDir(params.accountDir)
+	validatorAccount, err := sidechainHelper.GetAccount(params.accountDir, params.accountConfig)
 	if err != nil {
 		return err
 	}
@@ -99,21 +104,26 @@ func runCommand(cmd *cobra.Command, _ []string) error {
 		validatorAddress: validatorAccount.Ecdsa.Address().String(),
 	}
 
-	var foundLog bool
+	var (
+		withdrawalEvent contractsapi.WithdrawalEvent
+		foundLog        bool
+	)
 
 	for _, log := range receipt.Logs {
-		if withdrawEventABI.Match(log) {
-			event, err := withdrawEventABI.ParseLog(log)
-			if err != nil {
-				return err
-			}
-
-			result.amount = event["amount"].(*big.Int).Uint64()       //nolint:forcetypeassert
-			result.withdrawnTo = event["to"].(ethgo.Address).String() //nolint:forcetypeassert
-			foundLog = true
-
-			break
+		doesMatch, err := withdrawalEvent.ParseLog(log)
+		if !doesMatch {
+			continue
 		}
+
+		if err != nil {
+			return err
+		}
+
+		result.amount = withdrawalEvent.Amount.Uint64()
+		result.withdrawnTo = withdrawalEvent.To.String()
+		foundLog = true
+
+		break
 	}
 
 	if !foundLog {
